@@ -41,12 +41,21 @@ def load_work_orders():
 # ----------------------------
 def clean_deals(df):
 
-    # Normalize column names
-    df.columns = df.columns.str.strip()
-    df.columns = df.columns.str.lower().str.replace(" ", "_")
+    # Normalize column names safely
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_")
+        .str.replace(r"[^\w]", "", regex=True)
+    )
+
+    # Print to debug once
+    # st.write("Normalized columns:", df.columns.tolist())
 
     if "masked_deal_value" not in df.columns:
-        raise ValueError("Expected column 'masked_deal_value' not found")
+        st.error(f"Available columns: {df.columns.tolist()}")
+        raise ValueError("Masked deal value column not found")
 
     df["masked_deal_value"] = (
         df["masked_deal_value"]
@@ -58,19 +67,6 @@ def clean_deals(df):
     )
 
     return df
-
-
-def clean_work_orders(df):
-    log_trace("Cleaning Work Orders data")
-
-    df["Data Delivery Date"] = pd.to_datetime(
-        df["Data Delivery Date"], errors="coerce"
-    )
-
-    df["Execution Status"] = df["Execution Status"].fillna("Unknown")
-
-    return df
-
 
 # ----------------------------
 # METRICS ENGINE
