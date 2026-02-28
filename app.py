@@ -1,7 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime
 import json
 from openai import OpenAI
 
@@ -10,7 +8,6 @@ from openai import OpenAI
 # ----------------------------
 st.set_page_config(page_title="Monday BI Agent", layout="wide")
 
-# Load OpenAI key from Streamlit secrets
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
@@ -18,6 +15,8 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 # TRACE LOGGING
 # ----------------------------
 def log_trace(message):
+    if "trace" not in st.session_state:
+        st.session_state.trace = []
     st.session_state.trace.append(f"→ {message}")
 
 
@@ -26,13 +25,11 @@ def log_trace(message):
 # ----------------------------
 @st.cache_data
 def load_deals():
-    log_trace("Loading Deals CSV")
     return pd.read_csv("Cleaned_Deals.csv")
 
 
 @st.cache_data
 def load_work_orders():
-    log_trace("Loading Work Orders CSV")
     return pd.read_csv("Cleaned_Work_Orders.csv")
 
 
@@ -41,7 +38,9 @@ def load_work_orders():
 # ----------------------------
 def clean_deals(df):
 
-    # Normalize column names safely
+    log_trace("Cleaning Deals data")
+
+    # Normalize column names
     df.columns = (
         df.columns
         .str.strip()
@@ -50,36 +49,66 @@ def clean_deals(df):
         .str.replace(r"[^\w]", "", regex=True)
     )
 
-    # Print to debug once
-    # st.write("Normalized columns:", df.columns.tolist())
-
-    if "masked_deal_value" not in df.columns:
-        st.error(f"Available columns: {df.columns.tolist()}")
-        raise ValueError("Masked deal value column not found")
-
-    df["masked_deal_value"] = (
-        df["masked_deal_value"]
+    # Clean deal_value
+    df["deal_value"] = (
+        df["deal_value"]
         .replace("[\$,]", "", regex=True)
     )
+    df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
 
-    df["masked_deal_value"] = pd.to_numeric(
-        df["masked_deal_value"], errors="coerce"
+    # Convert dates
+    df["tentative_close_date"] = pd.to_datetime(
+        df["tentative_close_date"], errors="coerce"
     )
 
+    df["created_date"] = pd.to_datetime(
+        df["created_date"], errors="coerce"
+    )
+
+    # Normalize probability
+    probability_map = {
+        "high": 0.8,
+        "medium": 0.5,
+        "low": 0.2
+    }
+
+    df["closure_probability"] = df["closure_probability"].astype(str).str.lower()
+    df["prob_numeric"] = df["closure_probability"].map(probability_map)
+
     return df
+
+
+def clean_work_orders(df):
+
+    log_trace("Cleaning Work Orders data")
+
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.lower()
+        .str.replace(" ", "_")
+        .str.replace(r"[^\w]", "", regex=True)
+    )
+
+    if "execution_status" in df.columns:
+        df["execution_status"] = df["execution_status"].fillna("unknown")
+
+    return df
+
 
 # ----------------------------
 # METRICS ENGINE
 # ----------------------------
 def pipeline_by_sector(df, sector):
+
     log_trace(f"Filtering deals for sector: {sector}")
 
-    df_sector = df[df["Sector/service"] == sector]
+    df_sector = df[df["sector"] == sector]
 
-    total_value = df_sector["Masked Deal value"].sum()
+    total_value = df_sector["deal_value"].sum()
 
     weighted_value = (
-        df_sector["Masked Deal value"] *
+        df_sector["deal_value"] *
         df_sector["prob_numeric"].fillna(0.3)
     ).sum()
 
@@ -93,9 +122,11 @@ def pipeline_by_sector(df, sector):
 
 
 def sector_distribution(df):
+
     log_trace("Computing sector distribution")
+
     return (
-        df.groupby("Sector/service")["Masked Deal value"]
+        df.groupby("sector")["deal_value"]
         .sum()
         .sort_values(ascending=False)
     )
@@ -105,6 +136,7 @@ def sector_distribution(df):
 # LLM INSIGHT GENERATOR
 # ----------------------------
 def generate_insight(metrics):
+
     log_trace("Generating executive insight via LLM")
 
     prompt = f"""
@@ -143,8 +175,8 @@ if query:
     deals = clean_deals(load_deals())
     work_orders = clean_work_orders(load_work_orders())
 
-    # Simple sector extraction (basic version)
-    sector_list = deals["Sector/service"].dropna().unique()
+    # Sector extraction
+    sector_list = deals["sector"].dropna().unique()
     selected_sector = None
 
     for sector in sector_list:
@@ -157,7 +189,7 @@ if query:
     # Compute metrics
     metrics = pipeline_by_sector(deals, selected_sector)
 
-    # Generate LLM response
+    # Generate insight
     insight = generate_insight(metrics)
 
     # Display Results
