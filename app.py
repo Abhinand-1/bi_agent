@@ -1,13 +1,13 @@
 import streamlit as st
 import pandas as pd
 import json
+from datetime import datetime
 from openai import OpenAI
 
 # ----------------------------
 # CONFIG
 # ----------------------------
 st.set_page_config(page_title="Monday BI Agent", layout="wide")
-
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
@@ -27,7 +27,6 @@ def log_trace(message):
 def load_deals():
     return pd.read_csv("Cleaned_Deals.csv")
 
-
 @st.cache_data
 def load_work_orders():
     return pd.read_csv("Cleaned_Work_Orders.csv")
@@ -40,7 +39,6 @@ def clean_deals(df):
 
     log_trace("Cleaning Deals data")
 
-    # Normalize column names
     df.columns = (
         df.columns
         .str.strip()
@@ -59,10 +57,6 @@ def clean_deals(df):
     # Convert dates
     df["tentative_close_date"] = pd.to_datetime(
         df["tentative_close_date"], errors="coerce"
-    )
-
-    df["created_date"] = pd.to_datetime(
-        df["created_date"], errors="coerce"
     )
 
     # Normalize probability
@@ -90,8 +84,24 @@ def clean_work_orders(df):
         .str.replace(r"[^\w]", "", regex=True)
     )
 
-    if "execution_status" in df.columns:
-        df["execution_status"] = df["execution_status"].fillna("unknown")
+    return df
+
+
+# ----------------------------
+# QUARTER FILTERING
+# ----------------------------
+def filter_current_quarter(df):
+
+    log_trace("Filtering for current quarter")
+
+    today = datetime.today()
+    current_quarter = (today.month - 1) // 3 + 1
+    current_year = today.year
+
+    df = df[
+        (df["tentative_close_date"].dt.year == current_year) &
+        (((df["tentative_close_date"].dt.month - 1) // 3 + 1) == current_quarter)
+    ]
 
     return df
 
@@ -112,12 +122,20 @@ def pipeline_by_sector(df, sector):
         df_sector["prob_numeric"].fillna(0.3)
     ).sum()
 
+    missing_prob = df_sector["prob_numeric"].isna().sum()
+
+    confidence_score = round(
+        100 - (missing_prob / max(len(df_sector), 1)) * 100,
+        2
+    )
+
     return {
         "sector": sector,
         "total_pipeline": round(total_value, 2),
         "weighted_pipeline": round(weighted_value, 2),
-        "deal_count": len(df_sector),
-        "missing_probability": int(df_sector["prob_numeric"].isna().sum())
+        "deal_count": int(len(df_sector)),
+        "missing_probability_count": int(missing_prob),
+        "forecast_confidence_percent": confidence_score
     }
 
 
@@ -139,22 +157,30 @@ def generate_insight(metrics):
 
     log_trace("Generating executive insight via LLM")
 
-prompt = f"""
-You are a business intelligence advisor.
+    prompt = f"""
+    You are a business intelligence advisor.
 
-Use ONLY the provided metrics.
-Do NOT introduce external industry commentary.
-Do NOT assume anything beyond the data.
+    Use ONLY the provided metrics.
+    Do NOT introduce industry commentary.
+    Do NOT assume external information.
+    Base all reasoning strictly on the numbers below.
 
-Provide:
-1. Revenue outlook
-2. Risk areas based strictly on metrics
-3. Forecast confidence
-4. Concise recommendation
+    Provide:
+    1. Revenue outlook
+    2. Risk assessment
+    3. Forecast confidence
+    4. Concise recommendation
 
-Metrics:
-{json.dumps(metrics, indent=2)}
-"""
+    Metrics:
+    {json.dumps(metrics, indent=2)}
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    return response.choices[0].message.content
 
 
 # ----------------------------
@@ -171,11 +197,13 @@ if query:
 
     st.session_state.trace = []
 
-    # Load & clean data
     deals = clean_deals(load_deals())
     work_orders = clean_work_orders(load_work_orders())
 
-    # Sector extraction
+    # Apply quarter filtering
+    deals_q = filter_current_quarter(deals)
+
+    # Extract sector from query
     sector_list = deals["sector"].dropna().unique()
     selected_sector = None
 
@@ -186,19 +214,18 @@ if query:
     if not selected_sector:
         selected_sector = sector_list[0]
 
-    # Compute metrics
-    metrics = pipeline_by_sector(deals, selected_sector)
-
-    # Generate insight
+    metrics = pipeline_by_sector(deals_q, selected_sector)
     insight = generate_insight(metrics)
 
-    # Display Results
+    # ----------------------------
+    # DISPLAY
+    # ----------------------------
     st.subheader("Executive Insight")
     st.write(insight)
 
     st.subheader("Sector Pipeline Chart")
-    chart_data = sector_distribution(deals)
-    st.bar_chart(chart_data)
+    st.caption("Total pipeline value by sector")
+    st.bar_chart(sector_distribution(deals_q))
 
     st.subheader("Tool Trace")
     for step in st.session_state.trace:
