@@ -40,27 +40,22 @@ def load_work_orders():
 # CLEANING LAYER
 # ----------------------------
 def clean_deals(df):
-    log_trace("Cleaning Deals data")
 
-    df["Masked Deal value"] = (
-        df["Masked Deal value"]
+    # Normalize column names
+    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.lower().str.replace(" ", "_")
+
+    if "masked_deal_value" not in df.columns:
+        raise ValueError("Expected column 'masked_deal_value' not found")
+
+    df["masked_deal_value"] = (
+        df["masked_deal_value"]
         .replace("[\$,]", "", regex=True)
     )
-    df["Masked Deal value"] = pd.to_numeric(
-        df["Masked Deal value"], errors="coerce"
+
+    df["masked_deal_value"] = pd.to_numeric(
+        df["masked_deal_value"], errors="coerce"
     )
-
-    df["Tentative Close Date"] = pd.to_datetime(
-        df["Tentative Close Date"], errors="coerce"
-    )
-
-    probability_map = {
-        "High": 0.8,
-        "Medium": 0.5,
-        "Low": 0.2
-    }
-
-    df["prob_numeric"] = df["Closure Probability"].map(probability_map)
 
     return df
 
