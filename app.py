@@ -139,22 +139,22 @@ def generate_insight(metrics):
 
     log_trace("Generating executive insight via LLM")
 
-    prompt = f"""
-    You are a business intelligence advisor to a founder.
+prompt = f"""
+You are a business intelligence advisor.
 
-    Based on the metrics below, provide a concise executive summary.
-    Include revenue outlook, risk areas, and forecast confidence.
+Use ONLY the provided metrics.
+Do NOT introduce external industry commentary.
+Do NOT assume anything beyond the data.
 
-    Metrics:
-    {json.dumps(metrics, indent=2)}
-    """
+Provide:
+1. Revenue outlook
+2. Risk areas based strictly on metrics
+3. Forecast confidence
+4. Concise recommendation
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    return response.choices[0].message.content
+Metrics:
+{json.dumps(metrics, indent=2)}
+"""
 
 
 # ----------------------------
