@@ -314,13 +314,17 @@ def generate_insight(metrics):
     log_trace("Generating executive insight via LLM")
 
     prompt = f"""
-    You are a business intelligence advisor.
+    You are a business intelligence system.
 
-    Use ONLY the structured metrics below.
+    Use ONLY the metrics provided.
+    Do NOT speculate about market trends.
+    Do NOT assume external factors.
+    If deal_count is 0, clearly state there is no active pipeline in the selected timeframe.
+
     Provide:
-    - Executive summary
-    - Risk assessment
-    - One actionable recommendation
+    1. Executive Summary (strictly data-based)
+    2. Risk Assessment (based only on available metrics)
+    3. One Operational Recommendation (internal action, not market speculation)
 
     Metrics:
     {json.dumps(metrics, indent=2)}
@@ -329,11 +333,10 @@ def generate_insight(metrics):
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3
+        temperature=0.2
     )
 
     return response.choices[0].message.content
-
 
 # ----------------------------
 # UI
