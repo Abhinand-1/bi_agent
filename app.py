@@ -39,7 +39,7 @@ def clean_deals(df):
         df.columns.str.strip()
         .str.lower()
         .str.replace(" ", "_")
-        .str.replace(r"[^\w]", "", regex=True)
+        .str.replace(r"[^\w_]", "", regex=True)
     )
 
     df["deal_value"] = (
