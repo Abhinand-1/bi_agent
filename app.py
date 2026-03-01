@@ -171,21 +171,23 @@ def clean_work_orders(df):
 # ----------------------------
 # LLM INTENT PARSING
 # ----------------------------
-def parse_query_with_llm(query):
+prompt = f"""
+You are classifying business questions.
 
-    log_trace("Parsing user intent via LLM")
+Rules:
+- Questions about revenue, pipeline, forecast, outlook, sector performance → intent = "pipeline"
+- Questions about execution, completed deals, operational gaps, won vs executed → intent = "execution_gap"
 
-    prompt = f"""
-    Return ONLY valid JSON.
+Return ONLY valid JSON:
 
-    {{
-        "intent": "pipeline" or "execution_gap",
-        "sector": string or null,
-        "timeframe": "quarter" or "month" or "year" or null
-    }}
+{{
+    "intent": "pipeline" or "execution_gap",
+    "sector": string or null,
+    "timeframe": "quarter" or "month" or "year" or null
+}}
 
-    Question: {query}
-    """
+Question: {query}
+"""
 
     try:
         response = client.chat.completions.create(
