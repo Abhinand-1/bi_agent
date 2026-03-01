@@ -162,7 +162,10 @@ def parse_query_with_llm(query):
     prompt = f"""
     Extract structured intent from this founder question.
 
-    Return STRICT JSON:
+    Respond ONLY with valid JSON.
+    No explanation. No markdown.
+
+    Format:
     {{
         "intent": "pipeline" or "execution_gap",
         "sector": string or null,
@@ -173,13 +176,35 @@ def parse_query_with_llm(query):
     {query}
     """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
 
-    return json.loads(response.choices[0].message.content)
+        raw_content = response.choices[0].message.content.strip()
+
+        # Remove markdown if model adds it
+        if raw_content.startswith("```"):
+            raw_content = raw_content.split("```")[1]
+
+        parsed = json.loads(raw_content)
+
+        log_trace(f"Parsed intent: {parsed}")
+
+        return parsed
+
+    except Exception as e:
+
+        log_trace(f"LLM parsing error: {str(e)}")
+
+        # SAFE FALLBACK
+        return {
+            "intent": "pipeline",
+            "sector": None,
+            "timeframe": "quarter"
+        }
 
 
 # ----------------------------
