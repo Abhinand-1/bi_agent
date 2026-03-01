@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import json
 from datetime import datetime
+import matplotlib.pyplot as plt
 from openai import OpenAI
 
 # ----------------------------
@@ -78,34 +79,31 @@ def fetch_board_data(board_id):
 # CLEANING
 # ----------------------------
 def normalize_columns(df):
-    return (
-        df.columns
-        .str.strip()
+    df.columns = (
+        df.columns.str.strip()
         .str.lower()
         .str.replace(" ", "_")
         .str.replace(r"[^\w_]", "", regex=True)
     )
+    return df
 
 def clean_deals(df):
 
     log_trace("Cleaning Deals data")
 
-    df.columns = normalize_columns(df)
+    df = normalize_columns(df)
 
-    # Deal value
     if "masked_deal_value" in df.columns:
         df["deal_value"] = df["masked_deal_value"].replace(r"[\$,]", "", regex=True)
         df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
     else:
         df["deal_value"] = 0
 
-    # Close date
     if "tentative_close_date" in df.columns:
         df["tentative_close_date"] = pd.to_datetime(
             df["tentative_close_date"], errors="coerce"
         )
 
-    # Probability mapping
     probability_map = {"high": 0.8, "medium": 0.5, "low": 0.2}
 
     if "closure_probability" in df.columns:
@@ -124,9 +122,8 @@ def clean_work_orders(df):
 
     log_trace("Cleaning Work Orders data")
 
-    df.columns = normalize_columns(df)
+    df = normalize_columns(df)
 
-    # Try to auto-detect execution status column
     execution_cols = [c for c in df.columns if "execut" in c or "status" in c]
 
     if execution_cols:
@@ -141,10 +138,8 @@ def clean_work_orders(df):
 # ----------------------------
 def detect_intent(query):
     q = query.lower()
-
     if "won" in q and "execut" in q:
         return "execution_gap"
-
     return "pipeline"
 
 # ----------------------------
@@ -216,23 +211,20 @@ def execution_gap_metrics(deals, work_orders):
     if "execution_status" not in work_orders.columns or work_orders["execution_status"].isnull().all():
         return {
             "total_won_deals": int(len(won_deals)),
-            "not_executed_count": "Unknown",
-            "note": "Execution status unavailable"
+            "not_executed_count": "Unknown"
         }
 
-    # Join on item_name (board item name)
-    completed_items = work_orders[
+    completed = work_orders[
         work_orders["execution_status"] == "completed"
     ]["item_name"].unique()
 
     not_executed = won_deals[
-        ~won_deals["item_name"].isin(completed_items)
+        ~won_deals["item_name"].isin(completed)
     ]
 
     return {
         "total_won_deals": int(len(won_deals)),
-        "not_executed_count": int(len(not_executed)),
-        "not_executed_items": not_executed["item_name"].tolist()
+        "not_executed_count": int(len(not_executed))
     }
 
 # ----------------------------
@@ -247,11 +239,10 @@ def generate_insight(metrics, mode):
         Explain revenue outlook, risk level, and forecast confidence.
         Base reasoning strictly on the metrics.
         """
-
     else:
         instruction = """
         Explain operational execution gap and revenue realization risk.
-        Provide a concise business recommendation.
+        Provide a concise recommendation.
         """
 
     prompt = f"""
@@ -299,9 +290,14 @@ if query:
         deals_q = filter_current_quarter(deals)
 
         if "sectorservice" in deals_q.columns:
-            sector_list = deals_q["sectorservice"].dropna().unique()
+            sector_col = "sectorservice"
         elif "sector" in deals_q.columns:
-            sector_list = deals_q["sector"].dropna().unique()
+            sector_col = "sector"
+        else:
+            sector_col = None
+
+        if sector_col:
+            sector_list = deals_q[sector_col].dropna().unique()
         else:
             sector_list = []
 
@@ -316,12 +312,36 @@ if query:
         metrics = pipeline_metrics(deals_q, selected_sector)
         insight = generate_insight(metrics, "pipeline")
 
+        st.subheader("Executive Insight")
+        st.write(insight)
+
+        # ---- Chart ----
+        if sector_col:
+            st.subheader("Pipeline by Sector (Current Quarter)")
+            chart_data = deals_q.groupby(sector_col)["deal_value"].sum()
+            st.bar_chart(chart_data)
+
     else:
+
         metrics = execution_gap_metrics(deals, work_orders)
         insight = generate_insight(metrics, "execution")
 
-    st.subheader("Executive Insight")
-    st.write(insight)
+        st.subheader("Executive Insight")
+        st.write(insight)
+
+        # ---- Pie Chart ----
+        if isinstance(metrics.get("not_executed_count"), int):
+            completed = metrics["total_won_deals"] - metrics["not_executed_count"]
+            not_exec = metrics["not_executed_count"]
+
+            fig, ax = plt.subplots()
+            ax.pie(
+                [completed, not_exec],
+                labels=["Completed", "Not Executed"],
+                autopct="%1.1f%%"
+            )
+            st.subheader("Execution Status Overview")
+            st.pyplot(fig)
 
     st.subheader("Tool Trace")
     for step in st.session_state.trace:
