@@ -43,7 +43,7 @@ def clean_deals(df):
     )
 
     df["deal_value"] = (
-        df["deal_value"].replace("[\$,]", "", regex=True)
+        df["deal_value"] = df["deal_value"].replace(r"[\$,]", "", regex=True)
     )
     df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
 
