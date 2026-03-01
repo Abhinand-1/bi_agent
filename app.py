@@ -33,7 +33,7 @@ def log_trace(message):
     st.session_state.trace.append(f"→ {message}")
 
 # ----------------------------
-# MONDAY API FETCH (LIVE)
+# MONDAY API FETCH
 # ----------------------------
 def fetch_board_data(board_id):
 
@@ -64,8 +64,8 @@ def fetch_board_data(board_id):
             headers=MONDAY_HEADERS
         )
         response.raise_for_status()
-        data = response.json()
 
+        data = response.json()
         items = data["data"]["boards"][0]["items_page"]["items"]
 
         records = []
@@ -99,21 +99,20 @@ def normalize_columns(df):
 def clean_deals(df):
 
     log_trace("Cleaning Deals data")
-
     df = normalize_columns(df)
 
-    # 🔥 Improved Deal Value Parsing
+    # Improved deal value parsing
     if "masked_deal_value" in df.columns:
         df["deal_value"] = (
             df["masked_deal_value"]
             .astype(str)
-            .str.replace(r"[^\d.]", "", regex=True)  # remove currency + text
+            .str.replace(r"[^\d.]", "", regex=True)
         )
         df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
     else:
         df["deal_value"] = 0
 
-    # Dates
+    # Date parsing
     if "tentative_close_date" in df.columns:
         df["tentative_close_date"] = pd.to_datetime(
             df["tentative_close_date"], errors="coerce"
@@ -132,7 +131,7 @@ def clean_deals(df):
     else:
         df["prob_numeric"] = None
 
-    # Deal Status
+    # Status
     if "deal_status" in df.columns:
         df["deal_status"] = (
             df["deal_status"]
@@ -143,38 +142,9 @@ def clean_deals(df):
 
     # Sector normalization
     if "sectorservice" in df.columns:
-        df["sectorservice"] = (
-            df["sectorservice"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
+        df["sectorservice"] = df["sectorservice"].astype(str).str.lower().str.strip()
     elif "sector" in df.columns:
-        df["sector"] = (
-            df["sector"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
-
-    return df
-    # Probability
-    probability_map = {"high": 0.8, "medium": 0.5, "low": 0.2}
-    if "closure_probability" in df.columns:
-        df["closure_probability"] = df["closure_probability"].astype(str).str.lower().str.strip()
-        df["prob_numeric"] = df["closure_probability"].map(probability_map)
-    else:
-        df["prob_numeric"] = None
-
-    # Deal Status
-    if "deal_status" in df.columns:
-        df["deal_status"] = df["deal_status"].astype(str).str.lower().str.strip()
-
-    # Sector normalization
-    if "sectorservice" in df.columns:
-        df["sectorservice"] = df["sectorservice"].astype(str).str.strip().str.lower()
-    elif "sector" in df.columns:
-        df["sector"] = df["sector"].astype(str).str.strip().str.lower()
+        df["sector"] = df["sector"].astype(str).str.lower().str.strip()
 
     return df
 
@@ -182,18 +152,21 @@ def clean_deals(df):
 def clean_work_orders(df):
 
     log_trace("Cleaning Work Orders data")
-
     df = normalize_columns(df)
 
     execution_cols = [c for c in df.columns if "execut" in c or "status" in c]
 
     if execution_cols:
-        df["execution_status"] = df[execution_cols[0]].astype(str).str.lower().str.strip()
+        df["execution_status"] = (
+            df[execution_cols[0]]
+            .astype(str)
+            .str.lower()
+            .str.strip()
+        )
     else:
         df["execution_status"] = None
 
     return df
-
 
 # ----------------------------
 # LLM INTENT PARSING
@@ -203,52 +176,32 @@ def parse_query_with_llm(query):
     log_trace("Parsing user intent via LLM")
 
     prompt = f"""
-    Extract structured intent from this founder question.
+    Return ONLY valid JSON.
 
-    Respond ONLY with valid JSON.
-    No explanation. No markdown.
-
-    Format:
     {{
         "intent": "pipeline" or "execution_gap",
         "sector": string or null,
         "timeframe": "quarter" or "month" or "year" or null
     }}
 
-    Question:
-    {query}
+    Question: {query}
     """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
             temperature=0
         )
 
-        raw_content = response.choices[0].message.content.strip()
-
-        # Remove markdown if model adds it
-        if raw_content.startswith("```"):
-            raw_content = raw_content.split("```")[1]
-
-        parsed = json.loads(raw_content)
-
+        parsed = json.loads(response.choices[0].message.content)
         log_trace(f"Parsed intent: {parsed}")
-
         return parsed
 
     except Exception as e:
-
         log_trace(f"LLM parsing error: {str(e)}")
-
-        # SAFE FALLBACK
-        return {
-            "intent": "pipeline",
-            "sector": None,
-            "timeframe": "quarter"
-        }
-
+        return {"intent": "pipeline", "sector": None, "timeframe": "quarter"}
 
 # ----------------------------
 # TIME FILTER
@@ -258,7 +211,7 @@ def filter_timeframe(df, timeframe):
     if "tentative_close_date" not in df.columns or timeframe is None:
         return df
 
-    log_trace(f"Filtering data for timeframe: {timeframe}")
+    log_trace(f"Filtering timeframe: {timeframe}")
 
     today = datetime.today()
 
@@ -284,9 +237,7 @@ def filter_timeframe(df, timeframe):
         filtered = df
 
     log_trace(f"Records after timeframe filter: {len(filtered)}")
-
     return filtered
-
 
 # ----------------------------
 # METRICS
@@ -300,40 +251,22 @@ def pipeline_metrics(df, sector):
     if sector_col not in df.columns:
         return {"error": "Sector column missing"}
 
-    # Filter by sector if provided
-sector_col = None
-if "sectorservice" in deals_filtered.columns:
-    sector_col = "sectorservice"
-elif "sector" in deals_filtered.columns:
-    sector_col = "sector"
+    if sector:
+        df = df[df[sector_col] == sector]
 
-if sector_col:
+    deal_count = len(df)
 
-    chart_data = (
-        deals_filtered
-        .groupby(sector_col)["deal_value"]
-        .sum()
-        .reset_index()
+    total_value = df["deal_value"].sum() if "deal_value" in df.columns else 0
+    weighted_value = (
+        df["deal_value"] * df["prob_numeric"].fillna(0.3)
+    ).sum() if "deal_value" in df.columns else 0
+
+    missing_prob = df["prob_numeric"].isna().sum() if "prob_numeric" in df.columns else 0
+    missing_dates = df["tentative_close_date"].isna().sum() if "tentative_close_date" in df.columns else 0
+
+    confidence = None if deal_count == 0 else round(
+        100 - (missing_prob / deal_count) * 100, 2
     )
-
-    total_chart_value = chart_data["deal_value"].sum()
-
-    if total_chart_value > 0:
-        st.subheader("Pipeline by Sector")
-        st.bar_chart(chart_data.set_index(sector_col))
-    elif len(chart_data) > 0:
-        st.info("Deals exist but financial values are zero or missing. Chart suppressed.")
-    else:
-        st.info("No deals available for visualization in selected timeframe.")
-
-    # ✅ FIX: Proper zero-deal handling
-    if deal_count == 0:
-        confidence = None
-    else:
-        confidence = round(
-            100 - (missing_prob / deal_count) * 100,
-            2
-        )
 
     return {
         "sector": sector,
@@ -350,7 +283,7 @@ if sector_col:
 
 def execution_gap_metrics(deals, work_orders):
 
-    log_trace("Analyzing won vs execution gap")
+    log_trace("Analyzing execution gap")
 
     won_deals = deals[deals["deal_status"] == "won"]
 
@@ -367,26 +300,21 @@ def execution_gap_metrics(deals, work_orders):
         "not_executed_count": int(len(not_executed))
     }
 
-
 # ----------------------------
 # LLM INSIGHT
 # ----------------------------
 def generate_insight(metrics):
 
-    log_trace("Generating executive insight via LLM")
+    log_trace("Generating executive insight")
 
     prompt = f"""
-    You are a business intelligence system.
-
     Use ONLY the metrics provided.
-    Do NOT speculate about market trends.
-    Do NOT assume external factors.
-    If deal_count is 0, clearly state there is no active pipeline in the selected timeframe.
+    If deal_count is 0, clearly state no active pipeline.
 
     Provide:
-    1. Executive Summary (strictly data-based)
-    2. Risk Assessment (based only on available metrics)
-    3. One Operational Recommendation (internal action, not market speculation)
+    - Executive Summary
+    - Risk Assessment
+    - Operational Recommendation
 
     Metrics:
     {json.dumps(metrics, indent=2)}
@@ -414,11 +342,8 @@ if query:
 
     st.session_state.trace = []
 
-    deals_raw = fetch_board_data(DEALS_BOARD_ID)
-    work_orders_raw = fetch_board_data(WORK_ORDERS_BOARD_ID)
-
-    deals = clean_deals(deals_raw)
-    work_orders = clean_work_orders(work_orders_raw)
+    deals = clean_deals(fetch_board_data(DEALS_BOARD_ID))
+    work_orders = clean_work_orders(fetch_board_data(WORK_ORDERS_BOARD_ID))
 
     parsed = parse_query_with_llm(query)
 
@@ -428,17 +353,21 @@ if query:
     if parsed["intent"] == "pipeline":
 
         deals_filtered = filter_timeframe(deals, parsed["timeframe"])
-
         metrics = pipeline_metrics(deals_filtered, parsed["sector"])
-
         insight = generate_insight(metrics)
 
         st.subheader("Executive Insight")
         st.write(insight)
 
-        if "sectorservice" in deals_filtered.columns:
-            chart_data = deals_filtered.groupby("sectorservice")["deal_value"].sum()
-            st.bar_chart(chart_data)
+        # Chart
+        sector_col = "sectorservice" if "sectorservice" in deals_filtered.columns else "sector"
+        if sector_col in deals_filtered.columns:
+            chart_data = deals_filtered.groupby(sector_col)["deal_value"].sum()
+            if chart_data.sum() > 0:
+                st.subheader("Pipeline by Sector")
+                st.bar_chart(chart_data)
+            else:
+                st.info("Deals exist but financial values are zero or missing.")
 
     else:
 
@@ -449,6 +378,7 @@ if query:
         st.write(insight)
 
         completed = metrics["total_won_deals"] - metrics["not_executed_count"]
+
         fig, ax = plt.subplots()
         ax.pie(
             [completed, metrics["not_executed_count"]],
