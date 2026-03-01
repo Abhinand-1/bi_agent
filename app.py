@@ -102,9 +102,13 @@ def clean_deals(df):
 
     df = normalize_columns(df)
 
-    # Deal Value
+    # 🔥 Improved Deal Value Parsing
     if "masked_deal_value" in df.columns:
-        df["deal_value"] = df["masked_deal_value"].replace(r"[\$,]", "", regex=True)
+        df["deal_value"] = (
+            df["masked_deal_value"]
+            .astype(str)
+            .str.replace(r"[^\d.]", "", regex=True)  # remove currency + text
+        )
         df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
     else:
         df["deal_value"] = 0
@@ -115,6 +119,45 @@ def clean_deals(df):
             df["tentative_close_date"], errors="coerce"
         )
 
+    # Probability
+    probability_map = {"high": 0.8, "medium": 0.5, "low": 0.2}
+    if "closure_probability" in df.columns:
+        df["closure_probability"] = (
+            df["closure_probability"]
+            .astype(str)
+            .str.lower()
+            .str.strip()
+        )
+        df["prob_numeric"] = df["closure_probability"].map(probability_map)
+    else:
+        df["prob_numeric"] = None
+
+    # Deal Status
+    if "deal_status" in df.columns:
+        df["deal_status"] = (
+            df["deal_status"]
+            .astype(str)
+            .str.lower()
+            .str.strip()
+        )
+
+    # Sector normalization
+    if "sectorservice" in df.columns:
+        df["sectorservice"] = (
+            df["sectorservice"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+    elif "sector" in df.columns:
+        df["sector"] = (
+            df["sector"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+
+    return df
     # Probability
     probability_map = {"high": 0.8, "medium": 0.5, "low": 0.2}
     if "closure_probability" in df.columns:
