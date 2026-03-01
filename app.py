@@ -136,11 +136,30 @@ def clean_work_orders(df):
 # ----------------------------
 # INTENT DETECTION
 # ----------------------------
-def detect_intent(query):
-    q = query.lower()
-    if "won" in q and "execut" in q:
-        return "execution_gap"
-    return "pipeline"
+def parse_query_with_llm(query):
+
+    log_trace("Parsing user intent via LLM")
+
+    prompt = f"""
+    Extract structured intent from this founder question.
+
+    Return JSON with:
+    - intent (pipeline or execution_gap)
+    - sector (if mentioned)
+    - timeframe (quarter, month, year, none)
+
+    Question:
+    {query}
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
+    )
+
+    content = response.choices[0].message.content
+    return json.loads(content)
 
 # ----------------------------
 # QUARTER FILTER
