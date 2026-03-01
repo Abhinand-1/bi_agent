@@ -171,7 +171,14 @@ def clean_work_orders(df):
 # ----------------------------
 # LLM INTENT PARSING
 # ----------------------------
-prompt = f"""
+# ----------------------------
+# LLM INTENT PARSING
+# ----------------------------
+def parse_query_with_llm(query):
+
+    log_trace("Parsing user intent via LLM")
+
+    prompt = f"""
 You are classifying business questions.
 
 Rules:
@@ -203,7 +210,11 @@ Question: {query}
 
     except Exception as e:
         log_trace(f"LLM parsing error: {str(e)}")
-        return {"intent": "pipeline", "sector": None, "timeframe": "quarter"}
+        return {
+            "intent": "pipeline",
+            "sector": None,
+            "timeframe": "quarter"
+        }
 
 # ----------------------------
 # TIME FILTER
