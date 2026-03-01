@@ -42,9 +42,8 @@ def clean_deals(df):
         .str.replace(r"[^\w_]", "", regex=True)
     )
 
-    df["deal_value"] = (
-        df["deal_value"] = df["deal_value"].replace(r"[\$,]", "", regex=True)
-    )
+    # FIXED LINE
+    df["deal_value"] = df["deal_value"].replace(r"[\$,]", "", regex=True)
     df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
 
     df["tentative_close_date"] = pd.to_datetime(
@@ -67,7 +66,7 @@ def clean_work_orders(df):
         df.columns.str.strip()
         .str.lower()
         .str.replace(" ", "_")
-        .str.replace(r"[^\w]", "", regex=True)
+        .str.replace(r"[^\w_]", "", regex=True)   # FIXED
     )
 
     if "execution_status" in df.columns:
@@ -146,6 +145,11 @@ def pipeline_by_sector(df, sector):
 def won_not_executed(deals, work_orders):
     log_trace("Checking for won deals not executed")
 
+    if "execution_status" not in work_orders.columns:
+        return {
+            "error": "execution_status column missing in work_orders"
+        }
+
     won_deals = deals[deals["deal_status"] == "won"]
 
     completed = work_orders[
@@ -175,7 +179,6 @@ def generate_insight(metrics, context_type):
         Explain revenue outlook, risk level, forecast confidence,
         and interpret weighted conversion ratio.
         """
-
     else:
         instruction = """
         Explain operational execution gap, revenue realization risk,
