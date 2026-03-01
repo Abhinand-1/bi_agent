@@ -250,23 +250,32 @@ def pipeline_metrics(df, sector):
     if sector_col not in df.columns:
         return {"error": "Sector column missing"}
 
+    # Filter by sector if provided
     if sector:
         df = df[df[sector_col] == sector]
 
-    total_value = df["deal_value"].sum()
-    weighted_value = (df["deal_value"] * df["prob_numeric"].fillna(0.3)).sum()
+    deal_count = len(df)
 
-    missing_prob = df["prob_numeric"].isna().sum()
-    missing_dates = df["tentative_close_date"].isna().sum()
+    total_value = df["deal_value"].sum() if "deal_value" in df.columns else 0
+    weighted_value = (
+        df["deal_value"] * df["prob_numeric"].fillna(0.3)
+    ).sum() if "deal_value" in df.columns else 0
 
-    confidence = round(
-        100 - (missing_prob / max(len(df), 1)) * 100,
-        2
-    )
+    missing_prob = df["prob_numeric"].isna().sum() if "prob_numeric" in df.columns else 0
+    missing_dates = df["tentative_close_date"].isna().sum() if "tentative_close_date" in df.columns else 0
+
+    # ✅ FIX: Proper zero-deal handling
+    if deal_count == 0:
+        confidence = None
+    else:
+        confidence = round(
+            100 - (missing_prob / deal_count) * 100,
+            2
+        )
 
     return {
         "sector": sector,
-        "deal_count": int(len(df)),
+        "deal_count": int(deal_count),
         "total_pipeline": round(float(total_value), 2),
         "weighted_pipeline": round(float(weighted_value), 2),
         "forecast_confidence_percent": confidence,
