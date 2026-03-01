@@ -66,13 +66,18 @@ def clean_work_orders(df):
         df.columns.str.strip()
         .str.lower()
         .str.replace(" ", "_")
-        .str.replace(r"[^\w_]", "", regex=True)   # FIXED
+        .str.replace(r"[^\w_]", "", regex=True)
     )
 
-    if "execution_status" in df.columns:
-        df["execution_status"] = df["execution_status"].astype(str).str.lower()
+    # Automatically detect execution-related column
+    execution_cols = [col for col in df.columns if "execut" in col or "status" in col]
 
-    return df
+    if execution_cols:
+        df["execution_status"] = df[execution_cols[0]].astype(str).str.lower()
+    else:
+        df["execution_status"] = None
+
+    return dff
 
 
 # ----------------------------
