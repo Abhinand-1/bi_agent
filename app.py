@@ -266,7 +266,7 @@ def generate_insight(metrics, mode):
 # ----------------------------
 # UI
 # ----------------------------
-st.title("📊 Monday.com Business Intelligence Agent (Live API Mode)")
+st.title("Monday.com Business Intelligence Agent ")
 
 if "trace" not in st.session_state:
     st.session_state.trace = []
