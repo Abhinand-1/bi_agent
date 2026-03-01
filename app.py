@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import requests
 import json
 from datetime import datetime
 from openai import OpenAI
@@ -8,7 +9,19 @@ from openai import OpenAI
 # CONFIG
 # ----------------------------
 st.set_page_config(page_title="Monday BI Agent", layout="wide")
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+MONDAY_API_KEY = st.secrets["MONDAY_API_KEY"]
+DEALS_BOARD_ID = st.secrets["DEALS_BOARD_ID"]
+WORK_ORDERS_BOARD_ID = st.secrets["WORK_ORDERS_BOARD_ID"]
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+MONDAY_URL = "https://api.monday.com/v2"
+MONDAY_HEADERS = {
+    "Authorization": MONDAY_API_KEY,
+    "Content-Type": "application/json"
+}
 
 # ----------------------------
 # TRACE LOGGING
@@ -19,58 +32,102 @@ def log_trace(message):
     st.session_state.trace.append(f"→ {message}")
 
 # ----------------------------
-# LOAD LOCAL CSV
+# MONDAY API FETCH
 # ----------------------------
-@st.cache_data
-def load_deals():
-    return pd.read_csv("Cleaned_Deals.csv")
+def fetch_board_data(board_id):
 
-@st.cache_data
-def load_work_orders():
-    return pd.read_csv("Cleaned_Work_Orders.csv")
+    log_trace(f"Calling Monday API for board {board_id}")
+
+    query = f"""
+    {{
+      boards(ids: {board_id}) {{
+        items_page(limit: 500) {{
+          items {{
+            name
+            column_values {{
+              text
+              column {{
+                title
+              }}
+            }}
+          }}
+        }}
+      }}
+    }}
+    """
+
+    response = requests.post(
+        MONDAY_URL,
+        json={"query": query},
+        headers=MONDAY_HEADERS
+    )
+
+    data = response.json()
+    items = data["data"]["boards"][0]["items_page"]["items"]
+
+    records = []
+    for item in items:
+        row = {"item_name": item["name"]}
+        for col in item["column_values"]:
+            row[col["column"]["title"]] = col["text"]
+        records.append(row)
+
+    return pd.DataFrame(records)
 
 # ----------------------------
 # CLEANING
 # ----------------------------
-def clean_deals(df):
-    log_trace("Cleaning Deals data")
-
-    df.columns = (
-        df.columns.str.strip()
+def normalize_columns(df):
+    return (
+        df.columns
+        .str.strip()
         .str.lower()
         .str.replace(" ", "_")
         .str.replace(r"[^\w_]", "", regex=True)
     )
 
-    # FIXED LINE
-    df["deal_value"] = df["deal_value"].replace(r"[\$,]", "", regex=True)
-    df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
+def clean_deals(df):
 
-    df["tentative_close_date"] = pd.to_datetime(
-        df["tentative_close_date"], errors="coerce"
-    )
+    log_trace("Cleaning Deals data")
 
+    df.columns = normalize_columns(df)
+
+    # Deal value
+    if "masked_deal_value" in df.columns:
+        df["deal_value"] = df["masked_deal_value"].replace(r"[\$,]", "", regex=True)
+        df["deal_value"] = pd.to_numeric(df["deal_value"], errors="coerce")
+    else:
+        df["deal_value"] = 0
+
+    # Close date
+    if "tentative_close_date" in df.columns:
+        df["tentative_close_date"] = pd.to_datetime(
+            df["tentative_close_date"], errors="coerce"
+        )
+
+    # Probability mapping
     probability_map = {"high": 0.8, "medium": 0.5, "low": 0.2}
-    df["closure_probability"] = df["closure_probability"].astype(str).str.lower()
-    df["prob_numeric"] = df["closure_probability"].map(probability_map)
 
-    df["deal_status"] = df["deal_status"].astype(str).str.lower()
+    if "closure_probability" in df.columns:
+        df["closure_probability"] = df["closure_probability"].astype(str).str.lower()
+        df["prob_numeric"] = df["closure_probability"].map(probability_map)
+    else:
+        df["prob_numeric"] = None
+
+    if "deal_status" in df.columns:
+        df["deal_status"] = df["deal_status"].astype(str).str.lower()
 
     return df
 
 
 def clean_work_orders(df):
+
     log_trace("Cleaning Work Orders data")
 
-    df.columns = (
-        df.columns.str.strip()
-        .str.lower()
-        .str.replace(" ", "_")
-        .str.replace(r"[^\w_]", "", regex=True)
-    )
+    df.columns = normalize_columns(df)
 
-    # Automatically detect execution-related column
-    execution_cols = [col for col in df.columns if "execut" in col or "status" in col]
+    # Try to auto-detect execution status column
+    execution_cols = [c for c in df.columns if "execut" in c or "status" in c]
 
     if execution_cols:
         df["execution_status"] = df[execution_cols[0]].astype(str).str.lower()
@@ -79,7 +136,6 @@ def clean_work_orders(df):
 
     return df
 
-
 # ----------------------------
 # INTENT DETECTION
 # ----------------------------
@@ -87,40 +143,46 @@ def detect_intent(query):
     q = query.lower()
 
     if "won" in q and "execut" in q:
-        return "won_execution_gap"
+        return "execution_gap"
 
-    if "pipeline" in q or "forecast" in q:
-        return "pipeline_analysis"
-
-    return "pipeline_analysis"
-
+    return "pipeline"
 
 # ----------------------------
 # QUARTER FILTER
 # ----------------------------
 def filter_current_quarter(df):
+
+    if "tentative_close_date" not in df.columns:
+        return df
+
+    log_trace("Filtering for current quarter")
+
     today = datetime.today()
     current_quarter = (today.month - 1) // 3 + 1
     current_year = today.year
 
-    df = df[
+    return df[
         (df["tentative_close_date"].dt.year == current_year) &
         (((df["tentative_close_date"].dt.month - 1) // 3 + 1) == current_quarter)
     ]
 
-    return df
-
-
 # ----------------------------
 # METRICS
 # ----------------------------
-def pipeline_by_sector(df, sector):
-    log_trace(f"Analyzing pipeline for sector: {sector}")
+def pipeline_metrics(df, sector):
 
-    df_sector = df[df["sector"] == sector]
+    log_trace(f"Computing pipeline metrics for sector: {sector}")
+
+    if "sectorservice" in df.columns:
+        sector_col = "sectorservice"
+    elif "sector" in df.columns:
+        sector_col = "sector"
+    else:
+        return {}
+
+    df_sector = df[df[sector_col] == sector]
 
     total_value = df_sector["deal_value"].sum()
-
     weighted_value = (
         df_sector["deal_value"] *
         df_sector["prob_numeric"].fillna(0.3)
@@ -129,82 +191,73 @@ def pipeline_by_sector(df, sector):
     missing_prob = df_sector["prob_numeric"].isna().sum()
 
     confidence = round(
-        100 - (missing_prob / max(len(df_sector), 1)) * 100, 2
-    )
-
-    conversion_ratio = round(
-        (weighted_value / max(total_value, 1)) * 100, 2
+        100 - (missing_prob / max(len(df_sector), 1)) * 100,
+        2
     )
 
     return {
         "sector": sector,
-        "total_pipeline": round(total_value, 2),
-        "weighted_pipeline": round(weighted_value, 2),
+        "total_pipeline": round(float(total_value), 2),
+        "weighted_pipeline": round(float(weighted_value), 2),
         "deal_count": int(len(df_sector)),
-        "missing_probability_count": int(missing_prob),
-        "forecast_confidence_percent": confidence,
-        "weighted_conversion_ratio_percent": conversion_ratio
+        "forecast_confidence_percent": confidence
     }
 
 
-def won_not_executed(deals, work_orders):
+def execution_gap_metrics(deals, work_orders):
 
-    log_trace("Checking for won deals not executed")
+    log_trace("Analyzing won vs execution gap")
 
-    # Find execution column dynamically
-    execution_cols = [col for col in work_orders.columns if "execut" in col or "status" in col]
-
-    # Find join column dynamically
-    join_cols = [col for col in work_orders.columns if "deal" in col or "project" in col or "name" in col]
-
-    if not execution_cols or not join_cols:
-        return {
-            "error": "Required execution or join columns not found in work_orders",
-            "available_columns": work_orders.columns.tolist()
-        }
-
-    execution_col = execution_cols[0]
-    join_col = join_cols[0]
+    if "deal_status" not in deals.columns:
+        return {"error": "deal_status column missing"}
 
     won_deals = deals[deals["deal_status"] == "won"]
 
-    completed = work_orders[
-        work_orders[execution_col] == "completed"
-    ][join_col].unique()
+    if "execution_status" not in work_orders.columns or work_orders["execution_status"].isnull().all():
+        return {
+            "total_won_deals": int(len(won_deals)),
+            "not_executed_count": "Unknown",
+            "note": "Execution status unavailable"
+        }
+
+    # Join on item_name (board item name)
+    completed_items = work_orders[
+        work_orders["execution_status"] == "completed"
+    ]["item_name"].unique()
 
     not_executed = won_deals[
-        ~won_deals["deal_name"].isin(completed)
+        ~won_deals["item_name"].isin(completed_items)
     ]
 
     return {
         "total_won_deals": int(len(won_deals)),
         "not_executed_count": int(len(not_executed)),
-        "not_executed_deals": not_executed["deal_name"].tolist()
+        "not_executed_items": not_executed["item_name"].tolist()
     }
 
-
 # ----------------------------
-# LLM GENERATION
+# LLM
 # ----------------------------
-def generate_insight(metrics, context_type):
+def generate_insight(metrics, mode):
 
-    log_trace("Generating executive insight")
+    log_trace("Generating executive insight via LLM")
 
-    if context_type == "pipeline":
+    if mode == "pipeline":
         instruction = """
-        Explain revenue outlook, risk level, forecast confidence,
-        and interpret weighted conversion ratio.
+        Explain revenue outlook, risk level, and forecast confidence.
+        Base reasoning strictly on the metrics.
         """
+
     else:
         instruction = """
-        Explain operational execution gap, revenue realization risk,
-        and provide a concise recommendation.
+        Explain operational execution gap and revenue realization risk.
+        Provide a concise business recommendation.
         """
 
     prompt = f"""
     You are a business intelligence advisor.
-    Use ONLY the metrics provided.
-    Do NOT introduce external commentary.
+    Use ONLY the metrics below.
+    Do NOT assume external information.
 
     {instruction}
 
@@ -219,11 +272,10 @@ def generate_insight(metrics, context_type):
 
     return response.choices[0].message.content
 
-
 # ----------------------------
 # UI
 # ----------------------------
-st.title("📊 Monday.com Business Intelligence Agent (CSV Dev Mode)")
+st.title("📊 Monday.com Business Intelligence Agent (Live API Mode)")
 
 if "trace" not in st.session_state:
     st.session_state.trace = []
@@ -234,43 +286,42 @@ if query:
 
     st.session_state.trace = []
 
-    deals = clean_deals(load_deals())
-    work_orders = clean_work_orders(load_work_orders())
+    deals_raw = fetch_board_data(DEALS_BOARD_ID)
+    work_orders_raw = fetch_board_data(WORK_ORDERS_BOARD_ID)
+
+    deals = clean_deals(deals_raw)
+    work_orders = clean_work_orders(work_orders_raw)
 
     intent = detect_intent(query)
 
-    if intent == "pipeline_analysis":
+    if intent == "pipeline":
 
         deals_q = filter_current_quarter(deals)
 
-        sector_list = deals["sector"].dropna().unique()
-        selected_sector = None
+        if "sectorservice" in deals_q.columns:
+            sector_list = deals_q["sectorservice"].dropna().unique()
+        elif "sector" in deals_q.columns:
+            sector_list = deals_q["sector"].dropna().unique()
+        else:
+            sector_list = []
 
+        selected_sector = None
         for sector in sector_list:
             if sector.lower() in query.lower():
                 selected_sector = sector
 
-        if not selected_sector:
+        if not selected_sector and len(sector_list) > 0:
             selected_sector = sector_list[0]
 
-        metrics = pipeline_by_sector(deals_q, selected_sector)
+        metrics = pipeline_metrics(deals_q, selected_sector)
         insight = generate_insight(metrics, "pipeline")
 
-        st.subheader("Executive Insight")
-        st.write(insight)
-
-        st.subheader("Sector Pipeline Chart")
-        st.bar_chart(
-            deals_q.groupby("sector")["deal_value"].sum()
-        )
-
-    elif intent == "won_execution_gap":
-
-        metrics = won_not_executed(deals, work_orders)
+    else:
+        metrics = execution_gap_metrics(deals, work_orders)
         insight = generate_insight(metrics, "execution")
 
-        st.subheader("Executive Insight")
-        st.write(insight)
+    st.subheader("Executive Insight")
+    st.write(insight)
 
     st.subheader("Tool Trace")
     for step in st.session_state.trace:
