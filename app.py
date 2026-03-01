@@ -148,18 +148,29 @@ def pipeline_by_sector(df, sector):
 
 
 def won_not_executed(deals, work_orders):
+
     log_trace("Checking for won deals not executed")
 
-    if "execution_status" not in work_orders.columns:
+    # Find execution column dynamically
+    execution_cols = [col for col in work_orders.columns if "execut" in col or "status" in col]
+
+    # Find join column dynamically
+    join_cols = [col for col in work_orders.columns if "deal" in col or "project" in col or "name" in col]
+
+    if not execution_cols or not join_cols:
         return {
-            "error": "execution_status column missing in work_orders"
+            "error": "Required execution or join columns not found in work_orders",
+            "available_columns": work_orders.columns.tolist()
         }
+
+    execution_col = execution_cols[0]
+    join_col = join_cols[0]
 
     won_deals = deals[deals["deal_status"] == "won"]
 
     completed = work_orders[
-        work_orders["execution_status"] == "completed"
-    ]["deal_name"].unique()
+        work_orders[execution_col] == "completed"
+    ][join_col].unique()
 
     not_executed = won_deals[
         ~won_deals["deal_name"].isin(completed)
