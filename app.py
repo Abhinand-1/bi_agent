@@ -264,21 +264,28 @@ def filter_timeframe(df, timeframe):
 
     if timeframe == "quarter":
         current_quarter = (today.month - 1) // 3 + 1
-        return df[
+        filtered = df[
             (df["tentative_close_date"].dt.year == today.year) &
             (((df["tentative_close_date"].dt.month - 1) // 3 + 1) == current_quarter)
         ]
 
-    if timeframe == "month":
-        return df[
+    elif timeframe == "month":
+        filtered = df[
             (df["tentative_close_date"].dt.year == today.year) &
             (df["tentative_close_date"].dt.month == today.month)
         ]
 
-    if timeframe == "year":
-        return df[df["tentative_close_date"].dt.year == today.year]
+    elif timeframe == "year":
+        filtered = df[
+            df["tentative_close_date"].dt.year == today.year
+        ]
 
-    return df
+    else:
+        filtered = df
+
+    log_trace(f"Records after timeframe filter: {len(filtered)}")
+
+    return filtered
 
 
 # ----------------------------
@@ -294,18 +301,30 @@ def pipeline_metrics(df, sector):
         return {"error": "Sector column missing"}
 
     # Filter by sector if provided
-    if sector:
-        df = df[df[sector_col] == sector]
+sector_col = None
+if "sectorservice" in deals_filtered.columns:
+    sector_col = "sectorservice"
+elif "sector" in deals_filtered.columns:
+    sector_col = "sector"
 
-    deal_count = len(df)
+if sector_col:
 
-    total_value = df["deal_value"].sum() if "deal_value" in df.columns else 0
-    weighted_value = (
-        df["deal_value"] * df["prob_numeric"].fillna(0.3)
-    ).sum() if "deal_value" in df.columns else 0
+    chart_data = (
+        deals_filtered
+        .groupby(sector_col)["deal_value"]
+        .sum()
+        .reset_index()
+    )
 
-    missing_prob = df["prob_numeric"].isna().sum() if "prob_numeric" in df.columns else 0
-    missing_dates = df["tentative_close_date"].isna().sum() if "tentative_close_date" in df.columns else 0
+    total_chart_value = chart_data["deal_value"].sum()
+
+    if total_chart_value > 0:
+        st.subheader("Pipeline by Sector")
+        st.bar_chart(chart_data.set_index(sector_col))
+    elif len(chart_data) > 0:
+        st.info("Deals exist but financial values are zero or missing. Chart suppressed.")
+    else:
+        st.info("No deals available for visualization in selected timeframe.")
 
     # ✅ FIX: Proper zero-deal handling
     if deal_count == 0:
